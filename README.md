@@ -1,1 +1,1 @@
-# rust_template
+# RSS Checker
