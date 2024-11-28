@@ -1,11 +1,12 @@
-ARG BASE_IMG="alpine:3.19"
-ARG BUILD_IMG="rust:1-alpine3.19"
+ARG BASE_IMG="debian:bullseye"
+ARG BUILD_IMG="rust:1-bullseye"
 ARG APP_NAME="rss_checker"
 
 FROM $BUILD_IMG as builder
 WORKDIR /usr/src/${APP_NAME}
 
-RUN apk add --no-cache openssl-dev
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 COPY . .
 RUN cargo install --path .
@@ -18,7 +19,7 @@ ARG SERVICE_USER="service"
 ARG APP_NAME="rss_checker"
 
 RUN addgroup ${SERVICE_USER} \
-    && adduser -D -G ${SERVICE_USER} ${SERVICE_USER}
+    && adduser --system --no-create-home --ingroup ${SERVICE_USER} ${SERVICE_USER}
 
 COPY --from=builder /usr/local/cargo/bin/${APP_NAME} /opt/${APP_NAME}/bin/${APP_NAME}
 
