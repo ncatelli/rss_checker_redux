@@ -5,6 +5,8 @@ ARG APP_NAME="rss_checker"
 FROM $BUILD_IMG as builder
 WORKDIR /usr/src/${APP_NAME}
 
+RUN apk add --no-cache openssl-dev
+
 COPY . .
 RUN cargo install --path .
 
