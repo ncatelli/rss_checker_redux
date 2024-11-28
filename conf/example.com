@@ -1,1 +1,1 @@
-https://example.com/rss.xml
+http://web/feed.xml
