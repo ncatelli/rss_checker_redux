@@ -31,7 +31,7 @@ struct Args {
     cache_path: PathBuf,
 }
 
-fn fetch_feed(url: &Url) -> Result<Channel, Error> {
+fn get_feed(url: &Url) -> Result<Channel, Error> {
     let resp = reqwest::blocking::get(url.as_str())
         .map_err(|err| Error::new(ErrorKind::ReqwestErr(err)))?;
 
@@ -53,15 +53,22 @@ fn load_cache_feed<P: AsRef<Path>>(cache_path: P, name: &str) -> Result<Channel,
     Channel::read_from(cache_file).map_err(|err| Error::new(ErrorKind::RssErr(err)))
 }
 
-fn cache_feed<P: AsRef<Path>>(cache_path: P, channel: &Channel) -> Result<(), Error> {
+fn cache_feed<P: AsRef<Path>>(cache_path: P, name: &str, channel: &Channel) -> Result<(), Error> {
     use std::fs::OpenOptions;
 
+    let cache_file_path = cache_path.as_ref().join(name);
     let cache_file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(cache_path)
+        .open(&cache_file_path)
         .map_err(|err| Error::new(ErrorKind::IoErr(err)))?;
+
+    log::debug!(
+        "writing cache for feed[{}] to {}",
+        name,
+        cache_file_path.display()
+    );
 
     channel
         .write_to(cache_file)
@@ -79,7 +86,9 @@ fn handler<P: AsRef<Path>>(
     match maybe_cached_feed {
         // if the cache file exists, load it and return new feed urls
         Ok(cached_feed) => {
-            let new_feed = fetch_feed(feed_url)?;
+            log::debug!("cache file found for {}", feed_name);
+
+            let new_feed = get_feed(feed_url)?;
 
             let cached_items = cached_feed.items();
             let new_items = new_feed.items();
@@ -94,7 +103,7 @@ fn handler<P: AsRef<Path>>(
                 .map(|link| link.to_string())
                 .collect();
 
-            cache_feed(&cache_path, &new_feed)?;
+            cache_feed(&cache_path, feed_name, &new_feed)?;
             Ok(new_links)
         }
 
@@ -103,8 +112,10 @@ fn handler<P: AsRef<Path>>(
             kind: ErrorKind::IoErr(err),
             ..
         }) if err.kind() == io::ErrorKind::NotFound => {
-            let new_feed = fetch_feed(feed_url)?;
-            cache_feed(&cache_path, &new_feed)?;
+            log::debug!("cache file not found for {}", feed_name);
+
+            let new_feed = get_feed(feed_url)?;
+            cache_feed(&cache_path, feed_name, &new_feed)?;
 
             Ok(vec![])
         }
