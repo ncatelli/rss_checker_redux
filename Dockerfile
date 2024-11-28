@@ -8,7 +8,7 @@ WORKDIR /usr/src/${APP_NAME}
 COPY . .
 RUN cargo install --path .
 
-FROM $BASEIMG
+FROM $BASE_IMG
 LABEL maintainer="Nate Catelli <ncatelli@packetfire.org>"
 LABEL description="Container for rss_checker"
 
