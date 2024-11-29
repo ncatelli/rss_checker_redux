@@ -70,6 +70,27 @@ fn get_feed(feed_name: &str, url: &Url) -> Result<Channel, Error> {
     Channel::read_from(contents.as_bytes()).map_err(|err| Error::new(ErrorKind::RssErr(err)))
 }
 
+/// Checks if the cache path exists, and creates it if it doesn't. A [bool]
+/// signifying if the cache path is created on success.
+///
+/// # Errors
+///
+/// This may return an error if unable to create the cache path.
+fn create_cache_dir_if_not_present<P: AsRef<Path>>(cache_path: P) -> Result<bool, Error> {
+    use std::fs::{create_dir_all, exists};
+
+    let cache_path = cache_path.as_ref();
+    let cache_path_exists = exists(cache_path).map_err(|err| Error::new(ErrorKind::IoErr(err)))?;
+
+    if cache_path_exists {
+        Ok(false)
+    } else {
+        create_dir_all(cache_path)
+            .map(|_| true)
+            .map_err(|err| Error::new(ErrorKind::IoErr(err)))
+    }
+}
+
 fn load_cached_feed<P: AsRef<Path>>(cache_path: P, feed_name: &str) -> Result<Channel, Error> {
     let cache_file_path = cache_path.as_ref().join(feed_name);
     let cache_file = OpenOptions::new()
@@ -178,12 +199,23 @@ fn main() -> ExitCode {
     };
     logger_builder.init();
 
+    // Parse the conf directory
     let feed_mappings = match walker::walk_conf_dir(&conf_dir_path) {
         Ok(mappings) => mappings,
         Err(e) => {
             log::error!("{}", e);
             return ExitCode::FAILURE;
         }
+    };
+
+    // prepare the cache dir
+    match create_cache_dir_if_not_present(&cache_dir_path) {
+        Ok(true) => log::debug!("cache directory created"),
+        Err(e) => {
+            log::error!("{}", e);
+            return ExitCode::FAILURE;
+        }
+        _ => (),
     };
 
     let fetch_feeds: Vec<_> = feed_mappings
