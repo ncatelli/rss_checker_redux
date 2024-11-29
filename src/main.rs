@@ -58,42 +58,51 @@ struct Args {
     log_level: Option<LogLevelArg>,
 }
 
-fn get_feed(url: &Url) -> Result<Channel, Error> {
-    let resp = reqwest::blocking::get(url.as_str())
-        .map_err(|err| Error::new(ErrorKind::ReqwestErr(err)))?;
+fn get_feed(feed_name: &str, url: &Url) -> Result<Channel, Error> {
+    let resp = reqwest::blocking::get(url.as_str()).map_err(|err| {
+        Error::new(ErrorKind::ReqwestErr(err)).with_data(format!("feed[{}]", feed_name))
+    })?;
 
-    let contents = resp
-        .text()
-        .map_err(|err| Error::new(ErrorKind::ReqwestErr(err)))?;
+    let contents = resp.text().map_err(|err| {
+        Error::new(ErrorKind::ReqwestErr(err)).with_data(format!("feed[{}]", feed_name))
+    })?;
 
     Channel::read_from(contents.as_bytes()).map_err(|err| Error::new(ErrorKind::RssErr(err)))
 }
 
-fn load_cached_feed<P: AsRef<Path>>(cache_path: P, name: &str) -> Result<Channel, Error> {
-    let cache_file_path = cache_path.as_ref().join(name);
+fn load_cached_feed<P: AsRef<Path>>(cache_path: P, feed_name: &str) -> Result<Channel, Error> {
+    let cache_file_path = cache_path.as_ref().join(feed_name);
     let cache_file = OpenOptions::new()
         .read(true)
         .open(cache_file_path)
         .map(BufReader::new)
-        .map_err(|err| Error::new(ErrorKind::IoErr(err)))?;
+        .map_err(|err| {
+            Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
+        })?;
 
     Channel::read_from(cache_file).map_err(|err| Error::new(ErrorKind::RssErr(err)))
 }
 
-fn cache_feed<P: AsRef<Path>>(cache_path: P, name: &str, channel: &Channel) -> Result<(), Error> {
+fn cache_feed<P: AsRef<Path>>(
+    cache_path: P,
+    feed_name: &str,
+    channel: &Channel,
+) -> Result<(), Error> {
     use std::fs::OpenOptions;
 
-    let cache_file_path = cache_path.as_ref().join(name);
+    let cache_file_path = cache_path.as_ref().join(feed_name);
     let cache_file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .open(&cache_file_path)
-        .map_err(|err| Error::new(ErrorKind::IoErr(err)))?;
+        .map_err(|err| {
+            Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
+        })?;
 
     log::debug!(
         "writing cache for feed[{}] to {}",
-        name,
+        feed_name,
         cache_file_path.display()
     );
 
@@ -116,7 +125,7 @@ fn get_and_cache_new_items_from_feed<P: AsRef<Path>>(
         Ok(cached_feed) => {
             log::debug!("cache file found for {}", feed_name);
 
-            let new_feed = get_feed(feed_url)?;
+            let new_feed = get_feed(feed_name, feed_url)?;
 
             let cached_items = cached_feed.items();
             let new_items = new_feed.items();
@@ -142,7 +151,7 @@ fn get_and_cache_new_items_from_feed<P: AsRef<Path>>(
         }) if err.kind() == io::ErrorKind::NotFound => {
             log::debug!("cache file not found for {}", feed_name);
 
-            let new_feed = get_feed(feed_url)?;
+            let new_feed = get_feed(feed_name, feed_url)?;
             cache_feed(&cache_path, feed_name, &new_feed)?;
 
             Ok(vec![])
