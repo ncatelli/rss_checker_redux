@@ -4,7 +4,7 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
 use reqwest::Url;
 
@@ -13,6 +13,29 @@ pub(crate) use error::{Error, ErrorKind};
 use rss::Channel;
 
 mod walker;
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+enum LogLevelArg {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl From<LogLevelArg> for log::LevelFilter {
+    fn from(value: LogLevelArg) -> Self {
+        match value {
+            LogLevelArg::Off => Self::Off,
+            LogLevelArg::Error => Self::Error,
+            LogLevelArg::Warn => Self::Warn,
+            LogLevelArg::Info => Self::Info,
+            LogLevelArg::Debug => Self::Debug,
+            LogLevelArg::Trace => Self::Trace,
+        }
+    }
+}
 
 /// A rss feed checker
 #[derive(Parser, Debug)]
@@ -29,6 +52,10 @@ struct Args {
         default_value = ".rss_checker/cache"
     )]
     cache_path: PathBuf,
+
+    /// the directory path to store all cache files
+    #[arg(long = "log-level", env = "RUST_LOG", default_value = "error")]
+    log_level: Option<LogLevelArg>,
 }
 
 fn get_feed(url: &Url) -> Result<Channel, Error> {
@@ -126,11 +153,20 @@ fn handler<P: AsRef<Path>>(
 }
 
 fn main() -> ExitCode {
-    env_logger::init();
+    use env_logger::Builder;
 
     let args = Args::parse();
     let conf_dir_path = args.conf_path;
     let cache_dir_path = args.cache_path;
+    let maybe_log_level = args.log_level;
+
+    let mut logger_builder = Builder::from_default_env();
+    if let Some(log_level_arg) = maybe_log_level {
+        let level = log_level_arg.into();
+
+        logger_builder.filter_level(level);
+    };
+    logger_builder.init();
 
     let feed_mappings = match walker::walk_conf_dir(&conf_dir_path) {
         Ok(mappings) => mappings,
