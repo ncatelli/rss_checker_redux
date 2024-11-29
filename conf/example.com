@@ -1,0 +1,1 @@
+http://web/feed.xml

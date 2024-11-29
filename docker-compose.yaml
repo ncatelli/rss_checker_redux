@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+  web:
+    image: nginx
+    volumes:
+      - ./dev/nginx/www:/usr/share/nginx/html:ro
+    ports:
+      - 8080:80
+    healthcheck:
+      test: 'curl --fail http://localhost/feed.xml || exit 1'
+      interval: 10s
+      retries: 3
+  checker:
+    build: .
+    volumes:
+      - ./dev/conf:/opt/rss_checker/conf:ro
+      - cache:/opt/rss_checker/.rss_checker/cache
+    environment:
+      - 'RSS_CHECKER_CONF_PATH=/opt/rss_checker/conf/'
+      - 'RSS_CHECKER_CACHE_PATH=/opt/rss_checker/.rss_checker/cache/'
+    depends_on:
+      web:
+        condition: service_started
+volumes:
+  cache:
