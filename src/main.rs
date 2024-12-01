@@ -37,28 +37,7 @@ impl From<LogLevelArg> for log::LevelFilter {
     }
 }
 
-/// A rss feed checker
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// the directory path to source configuration files
-    #[arg(long = "conf-path", env = "RSS_CHECKER_CONF_PATH")]
-    conf_path: PathBuf,
-
-    /// the directory path to store all cache files
-    #[arg(
-        long = "cache-path",
-        env = "RSS_CHECKER_CACHE_PATH",
-        default_value = ".rss_checker/cache"
-    )]
-    cache_path: PathBuf,
-
-    /// the directory path to store all cache files
-    #[arg(long = "log-level", env = "RUST_LOG", default_value = "error")]
-    log_level: Option<LogLevelArg>,
-}
-
-fn get_feed(feed_name: &str, url: &Url) -> Result<Channel, Error> {
+fn get_feed_with_blocking_http_request(feed_name: &str, url: &Url) -> Result<Channel, Error> {
     let resp = reqwest::blocking::get(url.as_str()).map_err(|err| {
         Error::new(ErrorKind::ReqwestErr(err)).with_data(format!("feed[{}]", feed_name))
     })?;
@@ -113,11 +92,15 @@ fn cache_feed<P: AsRef<Path>>(
 }
 
 /// Handle the lookup of and caching of an individual feed.
-fn get_and_cache_new_items_from_feed<P: AsRef<Path>>(
+fn get_and_cache_new_items_from_feed<P>(
     cache_path: P,
     feed_name: &str,
     feed_url: &Url,
-) -> Result<Vec<String>, Error> {
+    update_feed_with_fn: impl Fn(&str, &Url) -> Result<Channel, Error>,
+) -> Result<Vec<String>, Error>
+where
+    P: AsRef<Path>,
+{
     let maybe_cached_feed = load_cached_feed(&cache_path, feed_name);
 
     match maybe_cached_feed {
@@ -125,7 +108,7 @@ fn get_and_cache_new_items_from_feed<P: AsRef<Path>>(
         Ok(cached_feed) => {
             log::debug!("cache file found for {}", feed_name);
 
-            let new_feed = get_feed(feed_name, feed_url)?;
+            let new_feed = update_feed_with_fn(feed_name, feed_url)?;
 
             let cached_items = cached_feed.items();
             let new_items = new_feed.items();
@@ -151,7 +134,7 @@ fn get_and_cache_new_items_from_feed<P: AsRef<Path>>(
         }) if err.kind() == io::ErrorKind::NotFound => {
             log::debug!("cache file not found for {}", feed_name);
 
-            let new_feed = get_feed(feed_name, feed_url)?;
+            let new_feed = update_feed_with_fn(feed_name, feed_url)?;
             cache_feed(&cache_path, feed_name, &new_feed)?;
 
             Ok(vec![])
@@ -160,6 +143,27 @@ fn get_and_cache_new_items_from_feed<P: AsRef<Path>>(
         // any other Error should be bubbled up
         Err(err) => Err(err),
     }
+}
+
+/// A rss feed checker
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// the directory path to source configuration files
+    #[arg(long = "conf-path", env = "RSS_CHECKER_CONF_PATH")]
+    conf_path: PathBuf,
+
+    /// the directory path to store all cache files
+    #[arg(
+        long = "cache-path",
+        env = "RSS_CHECKER_CACHE_PATH",
+        default_value = ".rss_checker/cache"
+    )]
+    cache_path: PathBuf,
+
+    /// the directory path to store all cache files
+    #[arg(long = "log-level", env = "RUST_LOG", default_value = "error")]
+    log_level: Option<LogLevelArg>,
 }
 
 fn main() -> ExitCode {
@@ -189,7 +193,12 @@ fn main() -> ExitCode {
     let fetch_feeds: Vec<_> = feed_mappings
         .par_iter()
         .map(|(feed_name, feed_url)| {
-            get_and_cache_new_items_from_feed(&cache_dir_path, feed_name, feed_url)
+            get_and_cache_new_items_from_feed(
+                &cache_dir_path,
+                feed_name,
+                feed_url,
+                get_feed_with_blocking_http_request,
+            )
         })
         .collect();
 
