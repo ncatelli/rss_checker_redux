@@ -49,59 +49,61 @@ fn get_feed_with_blocking_http_request(feed_name: &str, url: &Url) -> Result<Cha
     Channel::read_from(contents.as_bytes()).map_err(|err| Error::new(ErrorKind::RssErr(err)))
 }
 
-fn load_cached_feed<P: AsRef<Path>>(cache_path: P, feed_name: &str) -> Result<Channel, Error> {
-    let cache_file_path = cache_path.as_ref().join(feed_name);
-    let cache_file = OpenOptions::new()
-        .read(true)
-        .open(cache_file_path)
-        .map(BufReader::new)
-        .map_err(|err| {
-            Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
-        })?;
+fn load_cached_feed_from_disk(cache_path: &Path) -> impl Fn(&str) -> Result<Channel, Error> {
+    let cache_path = cache_path.to_owned();
 
-    Channel::read_from(cache_file).map_err(|err| Error::new(ErrorKind::RssErr(err)))
+    move |feed_name: &str| {
+        let cache_file_path = cache_path.join(feed_name);
+        let cache_file = OpenOptions::new()
+            .read(true)
+            .open(cache_file_path)
+            .map(BufReader::new)
+            .map_err(|err| {
+                Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
+            })?;
+
+        Channel::read_from(cache_file).map_err(|err| Error::new(ErrorKind::RssErr(err)))
+    }
 }
 
-fn cache_feed<P: AsRef<Path>>(
-    cache_path: P,
-    feed_name: &str,
-    channel: &Channel,
-) -> Result<(), Error> {
+fn cache_feed_to_disk(cache_path: &Path) -> impl Fn(&str, &Channel) -> Result<(), Error> {
     use std::fs::OpenOptions;
 
-    let cache_file_path = cache_path.as_ref().join(feed_name);
-    let cache_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&cache_file_path)
-        .map_err(|err| {
-            Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
-        })?;
+    let cache_path = cache_path.to_owned();
 
-    log::debug!(
-        "writing cache for feed[{}] to {}",
-        feed_name,
-        cache_file_path.display()
-    );
+    move |feed_name: &str, channel: &Channel| {
+        let cache_file_path = cache_path.join(feed_name);
+        let cache_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&cache_file_path)
+            .map_err(|err| {
+                Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
+            })?;
 
-    channel
-        .write_to(cache_file)
-        .map(|_| ())
-        .map_err(|err| Error::new(ErrorKind::RssErr(err)))
+        log::debug!(
+            "writing cache for feed[{}] to {}",
+            feed_name,
+            cache_file_path.display()
+        );
+
+        channel
+            .write_to(cache_file)
+            .map(|_| ())
+            .map_err(|err| Error::new(ErrorKind::RssErr(err)))
+    }
 }
 
 /// Handle the lookup of and caching of an individual feed.
-fn get_and_cache_new_items_from_feed<P>(
-    cache_path: P,
+fn get_and_cache_new_items_from_feed(
     feed_name: &str,
     feed_url: &Url,
+    load_cached_feed_with_fn: impl Fn(&str) -> Result<Channel, Error>,
     update_feed_with_fn: impl Fn(&str, &Url) -> Result<Channel, Error>,
-) -> Result<Vec<String>, Error>
-where
-    P: AsRef<Path>,
-{
-    let maybe_cached_feed = load_cached_feed(&cache_path, feed_name);
+    cache_feed_with_fn: impl Fn(&str, &Channel) -> Result<(), Error>,
+) -> Result<Vec<String>, Error> {
+    let maybe_cached_feed = load_cached_feed_with_fn(feed_name);
 
     match maybe_cached_feed {
         // if the cache file exists, load it and return new feed urls
@@ -123,7 +125,7 @@ where
                 .map(|link| link.to_string())
                 .collect();
 
-            cache_feed(&cache_path, feed_name, &new_feed)?;
+            cache_feed_with_fn(feed_name, &new_feed)?;
             Ok(new_links)
         }
 
@@ -135,7 +137,7 @@ where
             log::debug!("cache file not found for {}", feed_name);
 
             let new_feed = update_feed_with_fn(feed_name, feed_url)?;
-            cache_feed(&cache_path, feed_name, &new_feed)?;
+            cache_feed_with_fn(feed_name, &new_feed)?;
 
             Ok(vec![])
         }
@@ -194,10 +196,11 @@ fn main() -> ExitCode {
         .par_iter()
         .map(|(feed_name, feed_url)| {
             get_and_cache_new_items_from_feed(
-                &cache_dir_path,
                 feed_name,
                 feed_url,
+                load_cached_feed_from_disk(&cache_dir_path),
                 get_feed_with_blocking_http_request,
+                cache_feed_to_disk(&cache_dir_path),
             )
         })
         .collect();
