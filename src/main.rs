@@ -14,6 +14,45 @@ use rss::Channel;
 
 mod walker;
 
+trait FeedCacheReadable {
+    fn read_cache(&self, feed_name: &str) -> Result<Channel, Error>;
+}
+
+impl<F> FeedCacheReadable for F
+where
+    F: Fn(&str) -> Result<Channel, Error>,
+{
+    fn read_cache(&self, feed_name: &str) -> Result<Channel, Error> {
+        (self)(feed_name)
+    }
+}
+
+trait FeedGettable {
+    fn get_feed(&self, feed_name: &str, url: &Url) -> Result<Channel, Error>;
+}
+
+impl<F> FeedGettable for F
+where
+    F: Fn(&str, &Url) -> Result<Channel, Error>,
+{
+    fn get_feed(&self, feed_name: &str, url: &Url) -> Result<Channel, Error> {
+        (self)(feed_name, url)
+    }
+}
+
+trait FeedCacheWriteable {
+    fn write_cache(&self, feed_name: &str, feed: &Channel) -> Result<(), Error>;
+}
+
+impl<F> FeedCacheWriteable for F
+where
+    F: Fn(&str, &Channel) -> Result<(), Error>,
+{
+    fn write_cache(&self, feed_name: &str, feed: &Channel) -> Result<(), Error> {
+        (self)(feed_name, feed)
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 enum LogLevelArg {
     Off,
@@ -96,21 +135,25 @@ fn cache_feed_to_disk(cache_path: &Path) -> impl Fn(&str, &Channel) -> Result<()
 }
 
 /// Handle the lookup of and caching of an individual feed.
-fn get_and_cache_new_items_from_feed(
+fn get_and_cache_new_items_from_feed<
+    R: FeedCacheReadable,
+    F: FeedGettable,
+    W: FeedCacheWriteable,
+>(
     feed_name: &str,
     feed_url: &Url,
-    load_cached_feed_with_fn: impl Fn(&str) -> Result<Channel, Error>,
-    update_feed_with_fn: impl Fn(&str, &Url) -> Result<Channel, Error>,
-    cache_feed_with_fn: impl Fn(&str, &Channel) -> Result<(), Error>,
+    feed_cache_readable: R,
+    fetch_feed: F,
+    feed_writer: W,
 ) -> Result<Vec<String>, Error> {
-    let maybe_cached_feed = load_cached_feed_with_fn(feed_name);
+    let maybe_cached_feed = feed_cache_readable.read_cache(feed_name);
 
     match maybe_cached_feed {
         // if the cache file exists, load it and return new feed urls
         Ok(cached_feed) => {
             log::debug!("cache file found for {}", feed_name);
 
-            let new_feed = update_feed_with_fn(feed_name, feed_url)?;
+            let new_feed = fetch_feed.get_feed(feed_name, feed_url)?;
 
             let cached_items = cached_feed.items();
             let new_items = new_feed.items();
@@ -125,7 +168,7 @@ fn get_and_cache_new_items_from_feed(
                 .map(|link| link.to_string())
                 .collect();
 
-            cache_feed_with_fn(feed_name, &new_feed)?;
+            feed_writer.write_cache(feed_name, &new_feed)?;
             Ok(new_links)
         }
 
@@ -136,8 +179,8 @@ fn get_and_cache_new_items_from_feed(
         }) if err.kind() == io::ErrorKind::NotFound => {
             log::debug!("cache file not found for {}", feed_name);
 
-            let new_feed = update_feed_with_fn(feed_name, feed_url)?;
-            cache_feed_with_fn(feed_name, &new_feed)?;
+            let new_feed = fetch_feed.get_feed(feed_name, feed_url)?;
+            feed_writer.write_cache(feed_name, &new_feed)?;
 
             Ok(vec![])
         }
