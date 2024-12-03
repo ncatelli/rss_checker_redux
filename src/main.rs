@@ -255,7 +255,7 @@ fn main() -> ExitCode {
     for (feed_name, maybe_feed) in fetch_feeds {
         match maybe_feed {
             Ok(new_links) => new_unique_links.extend(new_links.into_iter()),
-            Err(e) => log::warn!("[{}]: {}", feed_name, e),
+            Err(e) => log::error!("[{}]: {}", feed_name, e),
         }
     }
 
