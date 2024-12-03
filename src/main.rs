@@ -262,3 +262,43 @@ fn main() -> ExitCode {
 
     ExitCode::SUCCESS
 }
+
+#[cfg(test)]
+mod tests {
+    use url::Url;
+
+    use super::*;
+
+    /// Provides a rss 2.0 feed in xml format locally.
+    const MOCK_LOCAL_GOOD_FEED: &str = include_str!("../dev/nginx/www/feed.xml");
+
+    #[allow(unused)]
+    struct MockFeedGetter<'data> {
+        contents: &'data str,
+    }
+
+    impl<'data> MockFeedGetter<'data> {
+        fn new(contents: &'data str) -> Self {
+            Self { contents }
+        }
+    }
+
+    impl<'data> FeedGettable for MockFeedGetter<'data> {
+        fn get_feed(&self, _feed_name: &str, _url: &Url) -> Result<Channel, Error> {
+            Channel::read_from(self.contents.as_bytes())
+                .map_err(|err| Error::new(ErrorKind::RssErr(err)))
+        }
+    }
+
+    #[test]
+    fn should_parse_valid_feed() {
+        let feed_url = Url::parse("http://example.com/feed.xml").unwrap();
+        let feed_name = "test";
+        let feed_getter = MockFeedGetter::new(MOCK_LOCAL_GOOD_FEED);
+
+        let channel = feed_getter.get_feed(feed_name, &feed_url).unwrap();
+        let channel_items = channel.items();
+
+        assert_eq!(channel_items.len(), 3);
+    }
+}
