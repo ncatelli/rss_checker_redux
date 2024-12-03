@@ -238,21 +238,24 @@ fn main() -> ExitCode {
     let fetch_feeds: Vec<_> = feed_mappings
         .par_iter()
         .map(|(feed_name, feed_url)| {
-            get_and_cache_new_items_from_feed(
+            (
                 feed_name,
-                feed_url,
-                load_cached_feed_from_disk(&cache_dir_path),
-                get_feed_with_blocking_http_request,
-                cache_feed_to_disk(&cache_dir_path),
+                get_and_cache_new_items_from_feed(
+                    feed_name,
+                    feed_url,
+                    load_cached_feed_from_disk(&cache_dir_path),
+                    get_feed_with_blocking_http_request,
+                    cache_feed_to_disk(&cache_dir_path),
+                ),
             )
         })
         .collect();
 
     let mut new_unique_links = BTreeSet::new();
-    for maybe_feed in fetch_feeds {
+    for (feed_name, maybe_feed) in fetch_feeds {
         match maybe_feed {
             Ok(new_links) => new_unique_links.extend(new_links.into_iter()),
-            Err(e) => log::warn!("{}", e),
+            Err(e) => log::warn!("[{}]: {}", feed_name, e),
         }
     }
 
