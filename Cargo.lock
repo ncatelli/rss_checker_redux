@@ -1154,6 +1154,7 @@ dependencies = [
 name = "rss_checker"
 version = "0.1.0"
 dependencies = [
+ "atom_syndication",
  "clap",
  "env_logger",
  "log",
