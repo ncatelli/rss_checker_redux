@@ -4,51 +4,90 @@ use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use atom_syndication::Feed;
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
 use reqwest::Url;
+use rss::Channel;
 
 mod error;
 pub(crate) use error::{Error, ErrorKind};
-use rss::Channel;
 
 mod walker;
 
+enum RssOrAtomFeed {
+    Rss2(Channel),
+    Atom(Feed),
+}
+
+trait LinkProduceable {
+    fn get_links(&self) -> Vec<Url>;
+}
+
+impl LinkProduceable for rss::Channel {
+    fn get_links(&self) -> Vec<Url> {
+        self.items()
+            .iter()
+            .filter_map(|item| item.link())
+            .filter_map(|link| Url::parse(link).ok())
+            .collect()
+    }
+}
+
+impl LinkProduceable for atom_syndication::Feed {
+    fn get_links(&self) -> Vec<Url> {
+        self.entries()
+            .iter()
+            .flat_map(|entry| entry.links())
+            .filter_map(|link| Url::parse(link.href()).ok())
+            .collect()
+    }
+}
+
+impl LinkProduceable for RssOrAtomFeed {
+    fn get_links(&self) -> Vec<Url> {
+        match self {
+            RssOrAtomFeed::Rss2(channel) => channel.get_links(),
+            RssOrAtomFeed::Atom(feed) => feed.get_links(),
+        }
+    }
+}
+
 trait FeedCacheReadable {
-    fn read_cache(&self, feed_name: &str) -> Result<Channel, Error>;
+    fn read_cache(&self, feed_name: &str) -> Result<RssOrAtomFeed, Error>;
 }
 
 impl<F> FeedCacheReadable for F
 where
-    F: Fn(&str) -> Result<Channel, Error>,
+    F: Fn(&str) -> Result<RssOrAtomFeed, Error>,
 {
-    fn read_cache(&self, feed_name: &str) -> Result<Channel, Error> {
+    fn read_cache(&self, feed_name: &str) -> Result<RssOrAtomFeed, Error> {
         (self)(feed_name)
     }
 }
 
 trait FeedGettable {
-    fn get_feed(&self, feed_name: &str, url: &Url) -> Result<Channel, Error>;
+    fn get_feed(&self, feed_name: &str, url: &Url) -> Result<RssOrAtomFeed, Error>;
 }
 
 impl<F> FeedGettable for F
 where
-    F: Fn(&str, &Url) -> Result<Channel, Error>,
+    F: Fn(&str, &Url) -> Result<RssOrAtomFeed, Error>,
 {
-    fn get_feed(&self, feed_name: &str, url: &Url) -> Result<Channel, Error> {
+    fn get_feed(&self, feed_name: &str, url: &Url) -> Result<RssOrAtomFeed, Error> {
         (self)(feed_name, url)
     }
 }
 
 trait FeedCacheWriteable {
-    fn write_cache(&self, feed_name: &str, feed: &Channel) -> Result<(), Error>;
+    fn write_cache(&self, feed_name: &str, feed: &RssOrAtomFeed) -> Result<(), Error>;
 }
 
 impl<F> FeedCacheWriteable for F
 where
-    F: Fn(&str, &Channel) -> Result<(), Error>,
+    F: Fn(&str, &RssOrAtomFeed) -> Result<(), Error>,
 {
-    fn write_cache(&self, feed_name: &str, feed: &Channel) -> Result<(), Error> {
+    fn write_cache(&self, feed_name: &str, feed: &RssOrAtomFeed) -> Result<(), Error> {
         (self)(feed_name, feed)
     }
 }
@@ -76,7 +115,7 @@ impl From<LogLevelArg> for log::LevelFilter {
     }
 }
 
-fn get_feed_with_blocking_http_request(feed_name: &str, url: &Url) -> Result<Channel, Error> {
+fn get_feed_with_blocking_http_request(feed_name: &str, url: &Url) -> Result<RssOrAtomFeed, Error> {
     let resp = reqwest::blocking::get(url.as_str()).map_err(|err| {
         Error::new(ErrorKind::ReqwestErr(err)).with_data(format!("feed[{}]", feed_name))
     })?;
@@ -85,32 +124,60 @@ fn get_feed_with_blocking_http_request(feed_name: &str, url: &Url) -> Result<Cha
         Error::new(ErrorKind::ReqwestErr(err)).with_data(format!("feed[{}]", feed_name))
     })?;
 
-    Channel::read_from(contents.as_bytes()).map_err(|err| Error::new(ErrorKind::RssErr(err)))
+    let maybe_channel =
+        Channel::read_from(contents.as_bytes()).map_err(|err| Error::new(ErrorKind::RssErr(err)));
+    let maybe_feed = Feed::read_from(contents.as_bytes())
+        .map_err(|err| Error::new(ErrorKind::AtomErr(err.to_string())));
+
+    match (maybe_channel, maybe_feed) {
+        (Ok(_), Ok(_)) => unreachable!(),
+        (Ok(channel), Err(_)) => Ok(RssOrAtomFeed::Rss2(channel)),
+        (Err(_), Ok(feed)) => Ok(RssOrAtomFeed::Atom(feed)),
+        (Err(_), Err(_)) => Err(Error::new(ErrorKind::FeedIsNeitherAtomOrRss(
+            feed_name.to_string(),
+        ))),
+    }
 }
 
-fn load_cached_feed_from_disk(cache_path: &Path) -> impl Fn(&str) -> Result<Channel, Error> {
+fn load_cached_feed_from_disk(cache_path: &Path) -> impl Fn(&str) -> Result<RssOrAtomFeed, Error> {
     let cache_path = cache_path.to_owned();
 
     move |feed_name: &str| {
         let cache_file_path = cache_path.join(feed_name);
         let cache_file = OpenOptions::new()
             .read(true)
-            .open(cache_file_path)
-            .map(BufReader::new)
+            .open(&cache_file_path)
             .map_err(|err| {
                 Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
             })?;
 
-        Channel::read_from(cache_file).map_err(|err| Error::new(ErrorKind::RssErr(err)))
+        let channel_load_result = Channel::read_from(BufReader::new(cache_file))
+            .map_err(|err| Error::new(ErrorKind::RssErr(err)));
+
+        let cache_file = OpenOptions::new()
+            .read(true)
+            .open(&cache_file_path)
+            .map_err(|err| {
+                Error::new(ErrorKind::IoErr(err)).with_data(format!("feed[{}]", feed_name))
+            })?;
+        let feed_load_result = Feed::read_from(BufReader::new(cache_file))
+            .map_err(|err| Error::new(ErrorKind::AtomErr(err.to_string())));
+
+        match (channel_load_result, feed_load_result) {
+            (Ok(_), Ok(_)) => unreachable!(),
+            (Ok(channel), Err(_)) => Ok(RssOrAtomFeed::Rss2(channel)),
+            (Err(_), Ok(feed)) => Ok(RssOrAtomFeed::Atom(feed)),
+            (Err(_), Err(_)) => Err(Error::new(ErrorKind::InvalidCache(feed_name.to_string()))),
+        }
     }
 }
 
-fn cache_feed_to_disk(cache_path: &Path) -> impl Fn(&str, &Channel) -> Result<(), Error> {
+fn cache_feed_to_disk(cache_path: &Path) -> impl Fn(&str, &RssOrAtomFeed) -> Result<(), Error> {
     use std::fs::OpenOptions;
 
     let cache_path = cache_path.to_owned();
 
-    move |feed_name: &str, channel: &Channel| {
+    move |feed_name: &str, feed: &RssOrAtomFeed| {
         let cache_file_path = cache_path.join(feed_name);
         let cache_file = OpenOptions::new()
             .write(true)
@@ -127,10 +194,16 @@ fn cache_feed_to_disk(cache_path: &Path) -> impl Fn(&str, &Channel) -> Result<()
             cache_file_path.display()
         );
 
-        channel
-            .write_to(cache_file)
-            .map(|_| ())
-            .map_err(|err| Error::new(ErrorKind::RssErr(err)))
+        match feed {
+            RssOrAtomFeed::Rss2(channel) => channel
+                .write_to(cache_file)
+                .map(|_| ())
+                .map_err(|err| Error::new(ErrorKind::RssErr(err))),
+            RssOrAtomFeed::Atom(feed) => feed
+                .write_to(cache_file)
+                .map(|_| ())
+                .map_err(|err| Error::new(ErrorKind::AtomErr(err.to_string()))),
+        }
     }
 }
 
@@ -155,13 +228,8 @@ fn get_and_cache_new_items_from_feed<
 
             let new_feed = fetch_feed.get_feed(feed_name, feed_url)?;
 
-            let cached_items = cached_feed.items();
-            let new_items = new_feed.items();
-
-            let cached_item_links: HashSet<_> =
-                cached_items.iter().flat_map(|item| item.link()).collect();
-            let new_item_links: HashSet<_> =
-                new_items.iter().flat_map(|item| item.link()).collect();
+            let cached_item_links: HashSet<_> = cached_feed.get_links().into_iter().collect();
+            let new_item_links: HashSet<_> = new_feed.get_links().into_iter().collect();
 
             let new_links: Vec<_> = new_item_links
                 .difference(&cached_item_links)
@@ -309,9 +377,10 @@ mod tests {
     }
 
     impl<'data> FeedGettable for MockFeedGetter<'data> {
-        fn get_feed(&self, _feed_name: &str, _url: &Url) -> Result<Channel, Error> {
+        fn get_feed(&self, _feed_name: &str, _url: &Url) -> Result<RssOrAtomFeed, Error> {
             Channel::read_from(self.contents.as_bytes())
                 .map_err(|err| Error::new(ErrorKind::RssErr(err)))
+                .map(RssOrAtomFeed::Rss2)
         }
     }
 
@@ -322,7 +391,7 @@ mod tests {
         let feed_getter = MockFeedGetter::new(MOCK_LOCAL_GOOD_FEED);
 
         let channel = feed_getter.get_feed(feed_name, &feed_url).unwrap();
-        let channel_items = channel.items();
+        let channel_items = channel.get_links();
 
         assert_eq!(channel_items.len(), 3);
     }

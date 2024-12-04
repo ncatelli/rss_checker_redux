@@ -4,17 +4,31 @@ use url::ParseError;
 
 #[derive(Debug)]
 pub enum ErrorKind {
+    FeedIsNeitherAtomOrRss(String),
+    InvalidCache(String),
     InvalidUrl { reason: ParseError, url: String },
     DuplicateFeed(String),
     IoErr(std::io::Error),
     InvalidFilename(OsString),
     ReqwestErr(reqwest::Error),
     RssErr(rss::Error),
+    // converted to a string for [Send]
+    AtomErr(String),
 }
 
 impl std::fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::FeedIsNeitherAtomOrRss(feed_name) => {
+                write!(
+                    f,
+                    "feed {} is neither an atom feed or RSS2.0 channel",
+                    feed_name
+                )
+            }
+            Self::InvalidCache(feed_name) => {
+                write!(f, "feed {} has an invalid cache file", feed_name)
+            }
             Self::DuplicateFeed(feed_name) => {
                 write!(f, "feed {} is defined more than once", feed_name)
             }
@@ -25,6 +39,7 @@ impl std::fmt::Display for ErrorKind {
             }
             Self::ReqwestErr(err) => write!(f, "{}", err),
             Self::RssErr(err) => write!(f, "{}", err),
+            Self::AtomErr(err) => write!(f, "{}", err),
         }
     }
 }
