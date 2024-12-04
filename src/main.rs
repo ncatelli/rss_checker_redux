@@ -227,6 +227,28 @@ fn main() -> ExitCode {
     };
     logger_builder.init();
 
+    // create the cache directory pathing
+    let maybe_cache_dir_metadata = std::fs::metadata(&cache_dir_path);
+    match maybe_cache_dir_metadata {
+        Ok(meta) if meta.is_dir() => (),
+        Ok(_) => {
+            log::error!(
+                "cache directory path exists and is not a directory: {:?}",
+                &cache_dir_path
+            );
+            return ExitCode::FAILURE;
+        }
+
+        // Attempt to create the directory if it doesn't exist.
+        Err(_) => {
+            log::debug!("creating cache directory at {:?}", &cache_dir_path);
+            if let Err(e) = std::fs::create_dir_all(&cache_dir_path) {
+                log::error!("{}", e);
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
     let feed_mappings = match walker::walk_conf_dir(&conf_dir_path) {
         Ok(mappings) => mappings,
         Err(e) => {
