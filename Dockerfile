@@ -6,7 +6,9 @@ FROM $BUILD_IMG as builder
 WORKDIR /usr/src/${APP_NAME}
 
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY . .
 RUN cargo install --path .
@@ -27,6 +29,10 @@ RUN mkdir -p /opt/${APP_NAME}/.${APP_NAME}/cache \
     && chown ${SERVICE_USER}:${SERVICE_USER}  /opt/${APP_NAME}/.${APP_NAME}/cache \
     && chown ${SERVICE_USER}:${SERVICE_USER} /opt/${APP_NAME}/bin/${APP_NAME} \
     && chmod +x /opt/${APP_NAME}/bin/${APP_NAME}
+
+RUN apt-get update && \
+    apt-get install -y openssl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 VOLUME /opt/${APP_NAME}/.${APP_NAME}/cache
 
