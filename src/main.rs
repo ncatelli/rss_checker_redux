@@ -277,15 +277,19 @@ struct Args {
     /// the directory path to store all cache files
     #[arg(long = "log-level", env = "RUST_LOG", default_value = "error")]
     log_level: Option<LogLevelArg>,
+
+    #[arg(long = "color", env = "RSS_CHECKER_COLOR")]
+    color: bool,
 }
 
 fn main() -> ExitCode {
-    use env_logger::Builder;
+    use env_logger::{Builder, WriteStyle};
 
     let args = Args::parse();
     let conf_dir_path = args.conf_path;
     let cache_dir_path = args.cache_path;
     let maybe_log_level = args.log_level;
+    let colorized = args.color;
 
     let mut logger_builder = Builder::from_default_env();
     if let Some(log_level_arg) = maybe_log_level {
@@ -293,6 +297,14 @@ fn main() -> ExitCode {
 
         logger_builder.filter_level(level);
     };
+
+    let write_style = if colorized {
+        WriteStyle::Always
+    } else {
+        WriteStyle::Never
+    };
+    logger_builder.write_style(write_style);
+
     logger_builder.init();
 
     // create the cache directory pathing
