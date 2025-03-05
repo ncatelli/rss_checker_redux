@@ -376,7 +376,7 @@ mod tests {
         }
     }
 
-    impl<'data> FeedGettable for MockFeedGetter<'data> {
+    impl FeedGettable for MockFeedGetter<'_> {
         fn get_feed(&self, _feed_name: &str, _url: &Url) -> Result<RssOrAtomFeed, Error> {
             Channel::read_from(self.contents.as_bytes())
                 .map_err(|err| Error::new(ErrorKind::RssErr(err)))
